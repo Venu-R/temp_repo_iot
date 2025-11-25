@@ -124,8 +124,66 @@ def emergency_check():
     conn.close()
     return jsonify({"message": "Check complete", "devices_checked": updated_count})
 
+# To receive external data sent by the AI server 
+@app.route('/api/external-data', methods=['POST'])
+def receive_external_data():
+    """
+    Accept sensor JSON from external clients, check DB power state,
+    forward to AI server at AI_SERVER_URL, update DB, return status.
+    """
+    conn = get_db_connection()
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        conn.close()
+        return jsonify({"error": "no json payload"}), 400
+
+    device_id = payload.get('device_id')
+    if device_id is None:
+        conn.close()
+        return jsonify({"error": "missing device_id"}), 400
+
+    device = conn.execute('SELECT * FROM devices WHERE id = ?', (device_id,)).fetchone()
+    if not device:
+        conn.close()
+        return jsonify({"error": "device not found"}), 404
+
+    if not device['power']:
+        conn.close()
+        return jsonify({"status": "ignored", "message": "Device is turned OFF"}), 200
+
+    ts = payload.get('timestamp') or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    ai_payload = {
+        "features": {
+            "device_id": str(device_id),
+            "timestamp": ts,
+            "temperature": payload.get('temperature'),
+            "humidity": payload.get('humidity'),
+            "motion": payload.get('motion', 0)
+        }
+    }
+
+    try:
+        ai_resp = requests.post(AI_SERVER_URL, json=ai_payload, timeout=10)
+        if ai_resp.status_code == 200:
+            ai_result = ai_resp.json()
+        else:
+            ai_result = {"label": "unknown", "raw_status": ai_resp.status_code}
+    except Exception as e:
+        ai_result = {"label": "unknown", "error": str(e)}
+
+    label = str(ai_result.get('label', 'unknown'))
+    threat_status = "Threat Detected" if (label.lower() != 'normal' and label != '0') else "No Threat"
+
+    data_str = f"{payload.get('temperature')}°C, {payload.get('humidity')}%"
+    conn.execute('UPDATE devices SET threat = ?, data = ?, last_seen = ? WHERE id = ?',
+                 (threat_status, data_str, "Just Now", device_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "processed", "threat": threat_status, "ai": ai_result})
+
 # --- THIS IS THE CRITICAL PART ---
 if __name__ == '__main__':
     init_db()
     print("Main Backend running on Port 8000...")
-    app.run(port=8000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True)
