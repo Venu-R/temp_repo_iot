@@ -4,12 +4,48 @@ import sqlite3
 import requests
 import time
 from datetime import datetime
-import random 
+import random
+from flask_socketio import SocketIO
+import socket
 
 app = Flask(__name__)
 CORS(app)
 
+# Initialize SocketIO for real-time pushes
+socketio = SocketIO(app, cors_allowed_origins="*")
+
 AI_SERVER_URL = "http://localhost:5000/predict"
+
+# --- Socket.IO debug handlers & test endpoint ---
+@socketio.on('connect')
+def handle_connect():
+    try:
+        sid = request.sid if hasattr(request, 'sid') else 'unknown'
+    except Exception:
+        sid = 'unknown'
+    print(f"Socket connected: sid={sid}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("Socket disconnected")
+
+@app.route('/api/test-emit', methods=['GET'])
+def test_emit():
+    payload = {
+        "device_id": 999,
+        "threat": "Test Emit",
+        "data": "test-data",
+        "last_seen": "Just Now"
+    }
+    try:
+        print(f"[EMIT] about to emit device_update -> device_id={payload.get('device_id')}")
+        # emit without the broadcast keyword (emit without room will go to all connected clients)
+        socketio.emit('device_update', payload)
+        print("[EMIT] emit completed")
+        return jsonify({"status": "emitted", "payload": payload})
+    except Exception as e:
+        print("Error emitting test:", e)
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 # --- Database Setup ---
 def init_db():
@@ -117,6 +153,21 @@ def emergency_check():
                 
                 conn.execute('UPDATE devices SET threat = ? WHERE id = ?', (threat_status, dev['id']))
                 updated_count += 1
+
+                # Emit update for frontend (real-time)
+                try:
+                    payload_for_ui = {
+                        "device_id": dev['id'],
+                        "threat": threat_status,
+                        "data": dev['data'],
+                        "last_seen": "Just Now"
+                    }
+                    print(f"[EMIT] emergency_check -> device_id={dev['id']} threat={threat_status}")
+                    socketio.emit('device_update', payload_for_ui)
+                    print("[EMIT] emergency_check emit completed")
+                except Exception as e:
+                    print("Socket emit error (emergency_check):", e)
+
         except Exception as e:
             print(f"AI Server Error for device {dev['id']}: {e}")
 
@@ -180,10 +231,40 @@ def receive_external_data():
     conn.commit()
     conn.close()
 
+    # Emit the update after DB commit so frontend gets the latest info
+    try:
+        payload_for_ui = {
+            "device_id": device_id,
+            "threat": threat_status,
+            "data": data_str,
+            "last_seen": "Just Now"
+        }
+        print(f"[EMIT] receive_external_data -> device_id={device_id} threat={threat_status} data={data_str}")
+        socketio.emit('device_update', payload_for_ui)
+        print("[EMIT] receive_external_data emit completed")
+    except Exception as e:
+        print("Socket emit error (receive_external_data):", e)
+
     return jsonify({"status": "processed", "threat": threat_status, "ai": ai_result})
+
+# Helper to determine local LAN IP for prettier startup banner
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # route discovery; no data is actually sent
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
 
 # --- THIS IS THE CRITICAL PART ---
 if __name__ == '__main__':
     init_db()
+    local_ip = get_local_ip()
     print("Main Backend running on Port 8000...")
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    print(f" * Local Access:   http://127.0.0.1:8000")
+    print(f" * Network Access: http://{local_ip}:8000")
+    socketio.run(app, host="0.0.0.0", port=8000, debug=True)

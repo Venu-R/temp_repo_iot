@@ -120,5 +120,24 @@ if(emergencyBtn) {
     });
 }
 
+// ---------------------- SOCKET.IO init (minimal) ----------------------
+let socket = null;
+try {
+  // If your browser is not on the same machine as the server, replace 'localhost' with the server LAN IP printed by app.py
+  socket = io("http://10.235.221.112:8000");
+
+  socket.on("connect", () => console.log("Socket connected:", socket.id));
+  socket.on("connect_error", (err) => console.error("Socket connect_error:", err));
+  socket.on("device_update", (payload) => {
+    console.log("Real-time update:", payload);
+    fetchAndRender(); // refresh UI when server pushes updates
+  });
+} catch (e) {
+  console.warn("Socket.IO init failed (fallback to polling):", e);
+  // optional: fallback polling if needed
+  setInterval(fetchAndRender, 3000);
+}
+// --------------------------------------------------------------------
+
 // Initial Load
 fetchAndRender();
