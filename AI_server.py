@@ -310,26 +310,43 @@ def predict_from_vector(vec):
             probs = None
 
     raw_pred = model.predict(Xs)[0]
-    label = str(raw_pred)
     label_idx = None
     try:
-        if isinstance(raw_pred, (int, np.integer)):
-            label_idx = int(raw_pred)
-        else:
-            label_idx = int(float(raw_pred))
+        label_idx = int(raw_pred)
     except Exception:
         label_idx = None
 
-    confidence = None
-    if probs is not None and label_idx is not None and 0 <= label_idx < len(probs):
-        try:
-            confidence = float(probs[label_idx])
-        except Exception:
-            confidence = None
+    # --- NEW THRESHOLD LOGIC ---
+    attack_prob = None
+    if probs is not None and len(probs) >= 2:
+        attack_prob = float(probs[1])
+        normal_prob = float(probs[0])
+    else:
+        # fallback (should rarely happen)
+        attack_prob = 0.0
+        normal_prob = 1.0
 
+    # final label after thresholding
+    if attack_prob >= 0.85:
+        final_label = "1"     # Threat
+        final_label_idx = 1
+    else:
+        final_label = "0"     # Normal
+        final_label_idx = 0
+
+    # confidence = max(probabilities)
+    confidence = max(normal_prob, attack_prob)
+
+    # Convert to list safely
     probs_list = probs.tolist() if probs is not None else None
 
-    return {"label": label, "label_idx": label_idx, "probs": probs_list, "confidence": confidence}
+    return {
+        "label": final_label,
+        "label_idx": final_label_idx,
+        "probs": probs_list,
+        "confidence": confidence
+    }
+
 
 def append_row_to_csv_and_log(feature_log_dict, result):
     try:

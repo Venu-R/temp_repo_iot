@@ -7,6 +7,9 @@ from datetime import datetime
 import random
 from flask_socketio import SocketIO
 import socket
+import hashlib
+import json
+from collections import deque, defaultdict
 
 app = Flask(__name__)
 CORS(app)
@@ -15,6 +18,25 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 AI_SERVER_URL = "http://localhost:5000/predict"
+
+# ---------- Replay / burst detection globals (minimal) ----------
+# per-device recent history: deque of (payload_hash, timestamp)
+_recent_payloads = defaultdict(lambda: deque(maxlen=1000))
+
+# tuning params (tweak to match your environment)
+REPLAY_WINDOW_SEC = 5.0        # window to consider repeats
+REPLAY_REPEAT_THRESHOLD = 8    # same payload count within window => replay
+BURST_RATE_THRESHOLD = 20      # messages per second within window => burst/DoS
+
+# small helper to quantize values for hashing (makes heuristic robust to tiny noise)
+def _hash_payload_for_replay(p):
+    # Quantize temperature to 0.1 and humidity to integer percent for stable hashing
+    key_obj = {
+        "temperature": None if p.get("temperature") is None else round(float(p.get("temperature")), 1),
+        "humidity": None if p.get("humidity") is None else int(round(float(p.get("humidity")))),
+        "motion": int(p.get("motion", 0))
+    }
+    return hashlib.sha256(json.dumps(key_obj, sort_keys=True).encode()).hexdigest()
 
 # --- Socket.IO debug handlers & test endpoint ---
 @socketio.on('connect')
@@ -202,6 +224,62 @@ def receive_external_data():
         conn.close()
         return jsonify({"status": "ignored", "message": "Device is turned OFF"}), 200
 
+    # -------------------------
+    # QUICK REPLAY / BURST HEURISTIC
+    # -------------------------
+    try:
+        now_ts = time.time()
+        payload_hash = _hash_payload_for_replay(payload)
+
+        dq = _recent_payloads[device_id]
+        dq.append((payload_hash, now_ts))
+
+        cutoff = now_ts - REPLAY_WINDOW_SEC
+        same_count = 0
+        total_in_window = 0
+        for h, ts in reversed(dq):
+            if ts < cutoff:
+                break
+            total_in_window += 1
+            if h == payload_hash:
+                same_count += 1
+
+        # replay detection: identical payload repeated many times within window
+        if same_count >= REPLAY_REPEAT_THRESHOLD:
+            threat_status = "Threat Detected"
+            data_str = f"{payload.get('temperature')}°C, {payload.get('humidity')}%"
+            conn.execute('UPDATE devices SET threat = ?, data = ?, last_seen = ? WHERE id = ?',
+                         (threat_status, data_str, "Just Now", device_id))
+            conn.commit()
+
+            try:
+                payload_for_ui = {"device_id": device_id, "threat": threat_status, "data": data_str, "last_seen": "Just Now"}
+                socketio.emit('device_update', payload_for_ui)
+            except Exception as e:
+                print("Socket emit error (replay heuristic):", e)
+
+            return jsonify({"status": "processed", "threat": threat_status, "ai": {"label": "replay_detected"}})
+
+        # burst-rate detection (high messages/sec)
+        if (total_in_window / max(1.0, REPLAY_WINDOW_SEC)) >= BURST_RATE_THRESHOLD:
+            threat_status = "Threat Detected"
+            data_str = f"{payload.get('temperature')}°C, {payload.get('humidity')}%"
+            conn.execute('UPDATE devices SET threat = ?, data = ?, last_seen = ? WHERE id = ?',
+                         (threat_status, data_str, "Just Now", device_id))
+            conn.commit()
+
+            try:
+                payload_for_ui = {"device_id": device_id, "threat": threat_status, "data": data_str, "last_seen": "Just Now"}
+                socketio.emit('device_update', payload_for_ui)
+            except Exception as e:
+                print("Socket emit error (burst heuristic):", e)
+
+            return jsonify({"status": "processed", "threat": threat_status, "ai": {"label": "burst_detected"}})
+
+    except Exception as e:
+        print("Replay heuristic error:", e)
+        # continue to AI processing path if heuristic fails
+
     ts = payload.get('timestamp') or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     ai_payload = {
         "features": {
@@ -222,8 +300,23 @@ def receive_external_data():
     except Exception as e:
         ai_result = {"label": "unknown", "error": str(e)}
 
+    # >>> NEW SAFE LABEL LOGIC <<<
     label = str(ai_result.get('label', 'unknown'))
-    threat_status = "Threat Detected" if (label.lower() != 'normal' and label != '0') else "No Threat"
+    print("[AI_RESP] label raw:", label, "ai_result:", ai_result)
+
+    label_norm = label.strip().lower()
+
+    # Treat explicit normal codes as safe
+    if label_norm in ('normal', '0', 'none', '', 'ok'):
+        threat_status = "No Threat"
+
+    # If AI couldn't decide or errored, avoid false alarms
+    elif label_norm in ('unknown', 'error', 'null'):
+        threat_status = "No Threat"
+
+    # Everything else counts as an attack
+    else:
+        threat_status = "Threat Detected"
 
     data_str = f"{payload.get('temperature')}°C, {payload.get('humidity')}%"
     conn.execute('UPDATE devices SET threat = ?, data = ?, last_seen = ? WHERE id = ?',
