@@ -38,7 +38,7 @@ def _hash_payload_for_replay(p):
     }
     return hashlib.sha256(json.dumps(key_obj, sort_keys=True).encode()).hexdigest()
 
-# --- Socket.IO debug handlers & test endpoint ---
+# --- Socket.IO handlers & test endpoint ---
 @socketio.on('connect')
 def handle_connect():
     try:
@@ -61,7 +61,6 @@ def test_emit():
     }
     try:
         print(f"[EMIT] about to emit device_update -> device_id={payload.get('device_id')}")
-        # emit without the broadcast keyword (emit without room will go to all connected clients)
         socketio.emit('device_update', payload)
         print("[EMIT] emit completed")
         return jsonify({"status": "emitted", "payload": payload})
@@ -206,6 +205,8 @@ def receive_external_data():
     """
     conn = get_db_connection()
     payload = request.get_json(force=True, silent=True)
+
+    # (debug prints removed)
     if not payload:
         conn.close()
         return jsonify({"error": "no json payload"}), 400
@@ -300,20 +301,16 @@ def receive_external_data():
     except Exception as e:
         ai_result = {"label": "unknown", "error": str(e)}
 
-    # >>> NEW SAFE LABEL LOGIC <<<
+    # >>> SAFE LABEL LOGIC <<<
     label = str(ai_result.get('label', 'unknown'))
-    print("[AI_RESP] label raw:", label, "ai_result:", ai_result)
-
     label_norm = label.strip().lower()
 
     # Treat explicit normal codes as safe
     if label_norm in ('normal', '0', 'none', '', 'ok'):
         threat_status = "No Threat"
-
     # If AI couldn't decide or errored, avoid false alarms
     elif label_norm in ('unknown', 'error', 'null'):
         threat_status = "No Threat"
-
     # Everything else counts as an attack
     else:
         threat_status = "Threat Detected"

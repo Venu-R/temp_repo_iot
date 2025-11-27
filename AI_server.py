@@ -1,4 +1,4 @@
-# server.py  (label-encoder removed, header-repair enabled)
+# server.py  (cleaned, header-repair enabled)
 # Usage:
 #   pip install flask pandas scikit-learn joblib python-dateutil
 #   python server.py
@@ -26,14 +26,9 @@ PRED_LOG = BASE / "predictions.log"
 CSV_LOG = BASE / "incoming_predictions.csv"
 
 # OPTIONAL: header-source CSV (if you want a raw header row above the server header)
-# Update filename if your chosen file differs.
 EXTRA_HEADER_CSV = BASE / "raw_headers.csv"
 
 def load_extra_headers():
-    """
-    Read header names from EXTRA_HEADER_CSV (first-row column names).
-    Returns list of header names or [].
-    """
     if not EXTRA_HEADER_CSV.exists():
         return []
     try:
@@ -90,16 +85,8 @@ def looks_numeric(x):
         return False
 
 def ensure_csv_has_headers(csv_path: Path, extra_headers, csv_header):
-    """
-    Ensure csv_path exists and starts with header rows:
-      - If file missing -> create and write headers.
-      - If file exists and empty -> write headers.
-      - If file exists and first row appears numeric -> prepend headers (repair).
-      - Otherwise leave as-is.
-    """
     try:
         import csv as _csv, tempfile
-        # create file with headers if missing
         if not csv_path.exists():
             with open(csv_path, "w", newline="") as f:
                 w = _csv.writer(f)
@@ -107,7 +94,6 @@ def ensure_csv_has_headers(csv_path: Path, extra_headers, csv_header):
                     w.writerow(extra_headers)
                 w.writerow(csv_header)
             return
-        # if exists but empty
         if csv_path.stat().st_size == 0:
             with open(csv_path, "w", newline="") as f:
                 w = _csv.writer(f)
@@ -115,11 +101,9 @@ def ensure_csv_has_headers(csv_path: Path, extra_headers, csv_header):
                     w.writerow(extra_headers)
                 w.writerow(csv_header)
             return
-        # inspect first row
         with open(csv_path, "r", newline="") as f:
             reader = _csv.reader(f)
             first = next(reader, [])
-        # if first row empty -> write headers (overwrite)
         if not first:
             tmp = csv_path.with_suffix(".tmp")
             with open(tmp, "w", newline="") as out_f:
@@ -132,7 +116,6 @@ def ensure_csv_has_headers(csv_path: Path, extra_headers, csv_header):
                         w.writerow(row)
             os.replace(str(tmp), str(csv_path))
             return
-        # if any first-row cell looks numeric -> repair by prepending headers
         if any(looks_numeric(c) for c in first):
             tmp = csv_path.with_suffix(".tmp")
             with open(tmp, "w", newline="") as out_f:
@@ -145,13 +128,10 @@ def ensure_csv_has_headers(csv_path: Path, extra_headers, csv_header):
                         w.writerow(row)
             os.replace(str(tmp), str(csv_path))
             return
-        # otherwise assume headers ok
     except Exception as e:
-        # log but don't crash startup
         with open(PRED_LOG, "a") as lf:
             lf.write(f"ensure_csv_has_headers error: {e}\n")
 
-# Ensure headers at startup (repair if needed)
 ensure_csv_has_headers(CSV_LOG, EXTRA_HEADERS, CSV_HEADER)
 
 # ---------- Thread-safe counters + writer queue ----------
@@ -212,10 +192,6 @@ cleanup_thread.start()
 
 # ---------- Background CSV writer (robust) ----------
 def csv_writer_loop():
-    """
-    Consume (feature_log_dict, result) items from write_queue and append to CSV in batches.
-    Ensures headers exist or repairs malformed CSVs before appending.
-    """
     import csv as _csv
     while True:
         batch = []
@@ -232,7 +208,6 @@ def csv_writer_loop():
             continue
 
         try:
-            # ensure header sanity before appending
             ensure_csv_has_headers(CSV_LOG, EXTRA_HEADERS, CSV_HEADER)
 
             with open(CSV_LOG, "a", newline="") as f:
@@ -316,28 +291,23 @@ def predict_from_vector(vec):
     except Exception:
         label_idx = None
 
-    # --- NEW THRESHOLD LOGIC ---
+    # ---------- Threshold logic ----------
     attack_prob = None
     if probs is not None and len(probs) >= 2:
         attack_prob = float(probs[1])
         normal_prob = float(probs[0])
     else:
-        # fallback (should rarely happen)
         attack_prob = 0.0
         normal_prob = 1.0
 
-    # final label after thresholding
-    if attack_prob >= 0.85:
-        final_label = "1"     # Threat
+    if attack_prob >= 0.975:
+        final_label = "1"
         final_label_idx = 1
     else:
-        final_label = "0"     # Normal
+        final_label = "0"
         final_label_idx = 0
 
-    # confidence = max(probabilities)
     confidence = max(normal_prob, attack_prob)
-
-    # Convert to list safely
     probs_list = probs.tolist() if probs is not None else None
 
     return {
@@ -346,7 +316,6 @@ def predict_from_vector(vec):
         "probs": probs_list,
         "confidence": confidence
     }
-
 
 def append_row_to_csv_and_log(feature_log_dict, result):
     try:
@@ -381,6 +350,7 @@ def predict_single():
         else:
             input_data = payload if isinstance(payload, dict) else {}
         vec, logdict = build_feature_vector_from_input(input_data)
+
         res = predict_from_vector(vec)
         res["uncertain"] = (res["confidence"] is not None and res["confidence"] < 0.4)
         append_row_to_csv_and_log(logdict, res)

@@ -53,10 +53,36 @@ void setupWiFi() {
   }
 }
 
+// Modified: ensure we return a proper ISO timestamp string.
+// Wait briefly for NTP (system time) to sync (up to ~2s) instead of returning plain millis().
 String getIsoTimestamp() {
   time_t now = time(nullptr);
-  if (now <= 1000) return String(millis());
-  
+
+  // If time() seems uninitialized (very small), wait briefly for NTP to populate it.
+  if (now <= 1000) {
+    unsigned long start = millis();
+    while (millis() - start < 2000) { // wait up to 2 seconds
+      delay(200);
+      now = time(nullptr);
+      if (now > 1000) break;
+    }
+  }
+
+  // If after waiting we still don't have a valid epoch, fall back to using current millis()
+  // but format it as a human-readable ISO-like string (so it's not a tiny integer like "6014").
+  if (now <= 1000) {
+    // fallback: produce an ISO-like timestamp using system uptime (not ideal, but not raw millis())
+    unsigned long ms = millis();
+    unsigned long sec = ms / 1000;
+    unsigned long hh = (sec / 3600) % 24;
+    unsigned long mm = (sec / 60) % 60;
+    unsigned long ss = sec % 60;
+    char buf_fb[32];
+    // use a placeholder date to keep format stable (YYYY-MM-DDTHH:MM:SS)
+    snprintf(buf_fb, sizeof(buf_fb), "1970-01-01T%02lu:%02lu:%02lu", hh, mm, ss);
+    return String(buf_fb);
+  }
+
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
   char buf[30];
