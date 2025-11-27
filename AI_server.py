@@ -300,7 +300,7 @@ def predict_from_vector(vec):
         attack_prob = 0.0
         normal_prob = 1.0
 
-    if attack_prob >= 0.975:
+    if attack_prob >= 0.987:
         final_label = "1"
         final_label_idx = 1
     else:

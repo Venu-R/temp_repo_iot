@@ -35,3 +35,26 @@ body {
   font-style: italic;
   color: #6c757d;
 }
+
+/* ---------- Threat popup styles (non-invasive) ---------- */
+#threat-popup {
+  position: absolute;
+  right: 20px;
+  top: 72px; /* positioned to sit below Emergency Check / Add Device */
+  z-index: 99999;
+  min-width: 260px;
+  max-width: 340px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  font-weight: 700;
+  font-size: 14.5px;
+  color: white;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+  text-align: left;
+  pointer-events: none; /* no interactions per your request */
+  opacity: 0.98;
+  background: linear-gradient(90deg,#d32f2f,#b71c1c);
+  letter-spacing: .2px;
+}
+#threat-popup .sub { font-weight: 600; font-size: 13px; opacity: .95; display:block; margin-top:6px; font-weight:500; }

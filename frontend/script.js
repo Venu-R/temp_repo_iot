@@ -66,6 +66,9 @@ async function fetchAndRender() {
       `;
       deviceGrid.appendChild(card);
     });
+
+    // After rendering, run the threat scan (ensures immediate popup if a threat is present)
+    scanDomForThreat();
   } catch (error) {
     console.error("Failed to fetch devices:", error);
   }
@@ -131,6 +134,8 @@ try {
   socket.on("device_update", (payload) => {
     console.log("Real-time update:", payload);
     fetchAndRender(); // refresh UI when server pushes updates
+    // NOTE: we intentionally don't show popup directly from socket payload here;
+    // we rely on server->DB->fetchAndRender so popup logic remains purely tied to rendered DOM text.
   });
 } catch (e) {
   console.warn("Socket.IO init failed (fallback to polling):", e);
@@ -141,3 +146,70 @@ try {
 
 // Initial Load
 fetchAndRender();
+
+
+
+/* ---------- Threat popup detection (STRICT: device-card text only) ---------- */
+/* Only shows popup when a rendered device card contains the exact string "Threat Detected".
+   It will NOT trigger from the summary badge or any other page text. */
+
+(function(){
+  // create/remove popup helpers
+  function createPopup(text) {
+    removePopup();
+    const p = document.createElement('div');
+    p.id = 'threat-popup';
+    p.innerHTML = `<div>⚠️ Threat Detected</div><span class="sub">${text || 'Potential malicious activity detected'}</span>`;
+    document.body.appendChild(p);
+  }
+  function removePopup() {
+    const ex = document.getElementById('threat-popup');
+    if (ex) ex.remove();
+  }
+
+  // STRICT check: only inspect .threat elements inside #device-grid and require exact phrase
+  function existsThreatDetectedInCards() {
+    try {
+      const threatNodes = document.querySelectorAll('#device-grid .threat');
+      for (let i = 0; i < threatNodes.length; i++) {
+        const txt = (threatNodes[i].innerText || '').trim();
+        if (/^Threat Detected$/i.test(txt)) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // main scan function (used by render completion and observer)
+  window.scanDomForThreat = function scanDomForThreat() {
+    if (existsThreatDetectedInCards()) {
+      createPopup('');
+    } else {
+      removePopup();
+    }
+  };
+
+  // Observe changes to the device grid only (so summary updates won't trigger this)
+  const deviceGrid = document.getElementById('device-grid');
+  if (deviceGrid) {
+    const obs = new MutationObserver(() => {
+      scanDomForThreat();
+    });
+    obs.observe(deviceGrid, { childList: true, subtree: true, characterData: true });
+  } else {
+    // fallback: scan periodically (rare case)
+    setInterval(scanDomForThreat, 1500);
+  }
+
+  // expose helpers for testing
+  window.__triggerThreatPopupForTest = function(msg){
+    createPopup(msg || 'Simulated threat for testing');
+  };
+  window.__removeThreatPopup = removePopup;
+
+  // initial quick check
+  window.addEventListener('load', scanDomForThreat);
+})();
