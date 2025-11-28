@@ -1,7 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266mDNS.h>
-#include <ArduinoOTA.h>
+//#include <ArduinoOTA.h>
 #include <DHT.h>
 #include <time.h>
 
@@ -22,7 +22,7 @@ const char* server = "http://10.235.221.112:8000/api/external-data";
 const int DEVICE_ID = 1;
 
 // Hostname for OTA
-const char* hostName = "esp-weather-01";
+//const char* hostName = "esp-weather-01";
 
 // NTP config
 const long gmtOffset_sec = 5 * 3600 + 30 * 60;
@@ -90,11 +90,13 @@ String getIsoTimestamp() {
   return String(buf);
 }
 
+/*
 void setupOTA() {
   ArduinoOTA.setHostname(hostName);
   ArduinoOTA.begin();
   Serial.println("OTA ready");
 }
+*/
 
 void setupTime() {
   configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
@@ -106,7 +108,7 @@ void setup() {
 
   dht.begin();
   setupWiFi();
-  setupOTA();
+  //setupOTA();
   setupTime();
 }
 
@@ -164,7 +166,7 @@ void sendSensorData() {
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  //ArduinoOTA.handle();
   reconnectIfNeeded();
 
   unsigned long now = millis();
